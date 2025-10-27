@@ -1,87 +1,121 @@
-from fastapi import FastAPI, Query
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, PlainTextResponse
-from urllib.parse import quote, urlparse
+#!/usr/bin/env python3
+"""
+VPNpower node agent — keep Xray REALITY clients in sync with backend.
 
-from .db import Base, engine
+Reads environment variables (systemd EnvironmentFile=/etc/vpnpower/agent.env):
+  SUB_BASE_URL       # e.g. https://vpnpower.ru
+  NODE_SYNC_SECRET   # shared secret for /api/nodes/active-uuids
+  XRAY_CONFIG        # default: /usr/local/etc/xray/config.json
+  INBOUND_TAG        # default: vless-reality-in
 
-# Routers
-from .routers import users as users_router
-from .routers import subscription as subscription_router
-from .routers import misc as misc_router
-from .routers import oneclick
-from .routers import me as me_router
-from .routers import shortlink as shortlink_router
-from .routers import deeplink_platform as deeplink_platform_router
-from .routers import node_sync as node_sync_router  # <-- подключаем новый роутер
-from backend.routers.tg_link import router as tg_link_router # <-- сбор тг айди
+Implementation detail:
+- Writes a temporary file in the SAME DIRECTORY as XRAY_CONFIG and then
+  atomically replaces the target (avoids EXDEV when PrivateTmp=yes).
+"""
 
-app = FastAPI(title="VPNpower API", version="0.1.0")
+import json
+import os
+import sys
+import tempfile
+import urllib.request
+import subprocess
+from pathlib import Path
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
-# Подключаем роутеры (без префикса, кроме /api для me)
-app.include_router(users_router.router, prefix="")
-app.include_router(subscription_router.router, prefix="")
-app.include_router(misc_router.router, prefix="")
-app.include_router(oneclick.router, prefix="")
-app.include_router(me_router.router, prefix="/api")
-app.include_router(shortlink_router.router, prefix="")
-app.include_router(deeplink_platform_router.router, prefix="")
-app.include_router(node_sync_router.router, prefix="")  # <-- так /api/nodes/active-uuids останется корректным
-app.include_router(tg_link_router, prefix="/tg", tags=["telegram"]) # <-- сбор тг айди
+def _env(name: str, default: str = "") -> str:
+    v = os.environ.get(name, default)
+    if not v:
+        print(f"[agent] ERROR: required env {name} is empty", file=sys.stderr)
+        sys.exit(2)
+    return v
 
-@app.on_event("startup")
-def on_startup():
-    # создаём таблицы один раз (не мешает существующим)
-    Base.metadata.create_all(bind=engine)
 
-@app.get("/health", response_class=PlainTextResponse)
-def health():
-    return "ok"
+def http_get_json(url: str) -> dict:
+    req = urllib.request.Request(url, headers={"User-Agent": "vpnpower-agent/1"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        data = r.read()
+    return json.loads(data.decode("utf-8"))
 
-# ---- Deep-link builder для открытия подписки в V2RayTun ----
-# Пример:
-#   /dl/sub?url=http(s)%3A%2F%2Fhost%2Fsub%2Fvless%3Ftoken%3D...&name=VPNpower&style=install&redirect=true
-@app.get("/dl/sub", summary="Deep link для открытия подписки в V2RayTun")
-def dl_sub(
-    url: str,
-    platform: str = Query("ios", pattern="^(ios|android)$"),
-    name: str | None = Query(None, description="Имя профиля (#Name)"),
-    style: str = Query("install", pattern="^(install|import)$", description="Способ для V2RayTun"),
-    redirect: bool = Query(True, description="Сразу сделать редирект в приложение"),
-):
-    sub_url = url.strip()
-    if name and not urlparse(sub_url).fragment:
-        sub_url = f"{sub_url}#{name}"
 
-    if style == "import":
-        deep = f"v2raytun://import/{sub_url}"
+def load_config(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text())
+    except Exception as e:
+        print(f"[agent] ERROR: cannot read {path}: {e}", file=sys.stderr)
+        sys.exit(3)
+
+
+def save_atomic(path: Path, data: dict):
+    dstdir = path.parent
+    # Write temp file in the SAME directory to avoid cross-device rename (EXDEV)
+    fd, tmpname = tempfile.mkstemp(prefix=".vpnpower-", suffix=".json", dir=str(dstdir))
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        os.replace(tmpname, path)  # atomic within the same filesystem
+    finally:
+        # If something went wrong before replace(), try to cleanup
+        try:
+            if os.path.exists(tmpname):
+                os.unlink(tmpname)
+        except Exception:
+            pass
+
+
+def ensure_clients(cfg: dict, inbound_tag: str, uuids: list[str], flow: str) -> bool:
+    changed = False
+    for inbound in cfg.get("inbounds", []):
+        if inbound.get("tag") != inbound_tag:
+            continue
+        clients = inbound.get("settings", {}).get("clients", [])
+        # Build a dict by id for quick access
+        by_id = {c.get("id"): c for c in clients}
+        # Add/update clients from remote
+        for uid in uuids:
+            cur = by_id.get(uid)
+            if not cur:
+                clients.append({"id": uid, "flow": flow})
+                changed = True
+            else:
+                if cur.get("flow") != flow:
+                    cur["flow"] = flow
+                    changed = True
+        # Drop extra clients that are not in remote list
+        keep = set(uuids)
+        if any(c.get("id") not in keep for c in clients):
+            inbound["settings"]["clients"] = [c for c in clients if c.get("id") in keep]
+            changed = True
+    return changed
+
+
+def main():
+    base = _env("SUB_BASE_URL")
+    secret = _env("NODE_SYNC_SECRET")
+    xr_path = Path(os.environ.get("XRAY_CONFIG", "/usr/local/etc/xray/config.json"))
+    inbound_tag = os.environ.get("INBOUND_TAG", "vless-reality-in")
+
+    url = f"{base.rstrip('/')}/api/nodes/active-uuids?secret={secret}"
+    remote = http_get_json(url)
+    flow = remote.get("flow") or "xtls-rprx-vision"
+    uuids = remote.get("uuids") or []
+
+    if not uuids:
+        print("[agent] WARNING: backend returned no uuids; nothing to do")
+        return
+
+    cfg = load_config(xr_path)
+    if ensure_clients(cfg, inbound_tag, uuids, flow):
+        save_atomic(xr_path, cfg)
+        print(f"[agent] Updated {xr_path} with {len(uuids)} clients (flow={flow}).")
+        # try reload xray
+        subprocess.run(["systemctl", "try-reload-or-restart", "xray"], check=False)
     else:
-        deep = f"v2raytun://install-config?url={quote(sub_url, safe='')}"
+        print("[agent] No changes needed.")
 
-    if redirect:
-        return RedirectResponse(deep)
-    return PlainTextResponse(deep)
-
-# ---- Совместимый редирект (как у конкурента) ----
-@app.get("/redirect", summary="Совместимый редирект в клиент (как у конкурента)")
-def redirect_compat(
-    url: str,
-    platform: str = Query("ios", pattern="^(ios|android)$"),
-    redirect: bool = Query(True, description="Сразу редиректить"),
-):
-    u = url.strip()
-    if u.lower().startswith(("v2raytun://", "sing-box://", "shadowrocket://")):
-        target = u
-    else:
-        target = f"v2raytun://install-config?url={quote(u, safe='')}"
-    if redirect:
-        return RedirectResponse(target)
-    return PlainTextResponse(target)
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print(f"[agent] ERROR: {e}", file=sys.stderr)
+        sys.exit(1)

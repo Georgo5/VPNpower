@@ -1,0 +1,110 @@
+{
+  "log": {
+    "loglevel": "info"
+  },
+  "inbounds": [
+    {
+      "tag": "vless-reality-in",
+      "port": 443,
+      "protocol": "vless",
+      "settings": {
+        "decryption": "none",
+        "clients": [
+          {
+            "id": "a5beab9c-21b9-47c8-8bb5-7164343d8901",
+            "flow": "xtls-rprx-vision"
+          },
+          {
+            "id": "81c21a08-3494-4922-9626-37064dd71418",
+            "flow": "xtls-rprx-vision"
+          },
+          {
+            "id": "85393f3b-c568-47ed-aacf-1c2e429fc37f",
+            "flow": "xtls-rprx-vision"
+          },
+          {
+            "id": "39c4f9bb-efc7-4e77-b9a5-92cd441f188a",
+            "flow": "xtls-rprx-vision"
+          },
+          {
+            "id": "04836f96-eb9b-461d-bc10-1477afbd771c",
+            "flow": "xtls-rprx-vision"
+          },
+          {
+            "id": "a79e22b1-49b9-4c79-b404-7494f43f3935",
+            "flow": "xtls-rprx-vision"
+          },
+          {
+            "id": "e8cc8ec4-de8f-4c70-bf2a-60ebe78c89b0",
+            "flow": "xtls-rprx-vision"
+          },
+          {
+            "id": "225a5a69-9565-4cd8-8372-0108e41aa062",
+            "flow": "xtls-rprx-vision"
+          },
+          {
+            "id": "caaec328-a947-46c3-bce4-88864fa39264",
+            "flow": "xtls-rprx-vision"
+          },
+          {
+            "id": "a42e5df7-e313-4837-8413-36c60ae44825",
+            "flow": "xtls-rprx-vision"
+          },
+          {
+            "id": "00838ccb-fdfa-485f-87af-63a30c7902e3",
+            "flow": "xtls-rprx-vision"
+          },
+          {
+            "id": "7c79465d-bb78-45e9-89dc-92cc886f3fc0",
+            "flow": "xtls-rprx-vision"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "dest": "st.ozone.ru:443",
+          "xver": 0,
+          "serverNames": [
+            "st.ozone.ru"
+          ],
+          "privateKey": "wN0QvaP4WnELLjRGJeCs4npTlbmy_XrB65xAeINaUUc",
+          "shortIds": [
+            "bc0f91ab14e0"
+          ],
+          "alpn": [
+            "h2",
+            "http/1.1"
+          ],
+          "maxClientHelloSize": 4096,
+          "minClientHelloSize": 128,
+          "fingerprint": "chrome"
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "tag": "direct"
+    },
+    {
+      "protocol": "blackhole",
+      "tag": "blocked"
+    }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": [
+          "vless-reality-in"
+        ],
+        "outboundTag": "direct"
+      }
+    ]
+  }
+}

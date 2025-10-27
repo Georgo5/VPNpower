@@ -1,0 +1,17 @@
+[Unit]
+Description=VPNpower node agent (keep Xray REALITY in sync)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/vpnpower/agent.env
+ExecStart=/usr/bin/python3 /usr/local/bin/main.py
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
