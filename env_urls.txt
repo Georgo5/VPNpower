@@ -1,0 +1,4 @@
+.env:SUB_BASE_URL=https://vpnpower.ru/sub
+.env:BACKEND_URL=https://vpnpower.ru
+.env.bot:BACKEND_URL=https://vpnpower.ru
+.env.bot:SUB_BASE_URL=https://vpnpower.ru
